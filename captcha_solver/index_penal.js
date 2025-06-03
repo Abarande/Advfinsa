@@ -456,9 +456,50 @@ if (!API_KEY) {
   }
 
   // ───────────────────────────────────────────────────────────────────────────
-  // 10) Inject the token into <textarea name="h-captcha-response"> inside incapsulaFrame
+  // 10) Inject the token into <textarea name="h-captcha-response"> both in the
+  //     main page and inside incapsulaFrame
   // ───────────────────────────────────────────────────────────────────────────
   console.log("✍️ Injecting the hCaptcha solution into textarea...");
+
+  // Update/create textareas on the main page
+  await page.evaluate(resolvedToken => {
+    let ta = document.querySelector("textarea[name='h-captcha-response']");
+    if (!ta) {
+      ta = document.createElement('textarea');
+      ta.name = 'h-captcha-response';
+      ta.style.display = 'none';
+      document.body.appendChild(ta);
+    }
+    ta.value = resolvedToken;
+    ta.innerText = resolvedToken;
+    ta.dispatchEvent(new Event('change', { bubbles: true }));
+
+    let ga = document.querySelector("textarea[name='g-recaptcha-response']");
+    if (!ga) {
+      ga = document.createElement('textarea');
+      ga.name = 'g-recaptcha-response';
+      ga.style.display = 'none';
+      document.body.appendChild(ga);
+    }
+    ga.value = resolvedToken;
+    ga.innerText = resolvedToken;
+    ga.dispatchEvent(new Event('change', { bubbles: true }));
+  }, token);
+
+  // Verify token via window.hcaptcha.getResponse() in both contexts
+  const frameValid = await incapsulaFrame.evaluate(tk => {
+    try {
+      return !!(window.hcaptcha && window.hcaptcha.getResponse() === tk);
+    } catch (_) { return false; }
+  }, token);
+  const pageValid = await page.evaluate(tk => {
+    try {
+      return !!(window.hcaptcha && window.hcaptcha.getResponse() === tk);
+    } catch (_) { return false; }
+  }, token);
+  console.log("✅ hcaptcha.getResponse() check →", { frameValid, pageValid });
+
+  // Preserve existing logic for the iframe
   await incapsulaFrame.evaluate(resolvedToken => {
     let ta = document.querySelector("textarea[name='h-captcha-response']");
     if (!ta) {
@@ -505,8 +546,8 @@ if (!API_KEY) {
     console.warn("⚠️ Unable to click the hCaptcha checkbox. Are selectors correct?", err);
   }
 
-  // Give Imperva 2s to *actually* remove its gate overlay
-  await new Promise(r => setTimeout(r, 2000));
+  // Wait for the Incapsula overlay iframe to disappear
+  await page.waitForSelector('iframe#main-iframe', { hidden: true });
   console.log("🎉 Done solving hCaptcha. Imperva gate should now be lifted.");
 
   // ───────────────────────────────────────────────────────────────────────────
