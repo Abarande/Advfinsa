@@ -382,6 +382,9 @@ if (!API_KEY) {
     process.exit(1);
   }
 
+  // Grab the current user agent so we can send it to 2Captcha
+  const userAgent = await page.evaluate(() => navigator.userAgent);
+
   // ───────────────────────────────────────────────────────────────────────────
   // 8) Send sitekey + page URL to 2Captcha via HTTPS
   // ───────────────────────────────────────────────────────────────────────────
@@ -391,7 +394,8 @@ if (!API_KEY) {
     const inResponse = await fetch(
       `https://2captcha.com/in.php?key=${API_KEY}` +
       `&method=hcaptcha&sitekey=${encodeURIComponent(sitekey)}` +
-      `&pageurl=${encodeURIComponent(PAGE_URL)}&json=1`
+      `&pageurl=${encodeURIComponent(PAGE_URL)}` +
+      `&json=1&userAgent=${encodeURIComponent(userAgent)}`
     );
     inResponseJSON = await inResponse.json();
   } catch (err) {
@@ -456,11 +460,31 @@ if (!API_KEY) {
   // ───────────────────────────────────────────────────────────────────────────
   console.log("✍️ Injecting the hCaptcha solution into textarea...");
   await incapsulaFrame.evaluate(resolvedToken => {
-    const ta = document.querySelector("textarea[name='h-captcha-response']");
-    if (ta) {
-      ta.value = resolvedToken;
-      ta.innerText = resolvedToken;
-      ta.dispatchEvent(new Event("change", { bubbles: true }));
+    let ta = document.querySelector("textarea[name='h-captcha-response']");
+    if (!ta) {
+      ta = document.createElement('textarea');
+      ta.name = 'h-captcha-response';
+      ta.style.display = 'none';
+      document.body.appendChild(ta);
+    }
+    ta.value = resolvedToken;
+    ta.innerText = resolvedToken;
+    ta.dispatchEvent(new Event('change', { bubbles: true }));
+
+    // Mirror value for g-recaptcha-response as some sites check both
+    let ga = document.querySelector("textarea[name='g-recaptcha-response']");
+    if (!ga) {
+      ga = document.createElement('textarea');
+      ga.name = 'g-recaptcha-response';
+      ga.style.display = 'none';
+      document.body.appendChild(ga);
+    }
+    ga.value = resolvedToken;
+    ga.innerText = resolvedToken;
+    ga.dispatchEvent(new Event('change', { bubbles: true }));
+
+    if (window.hcaptcha && typeof window.hcaptcha.execute === 'function') {
+      try { window.hcaptcha.execute(); } catch (_) { /* ignore */ }
     }
   }, token);
 
