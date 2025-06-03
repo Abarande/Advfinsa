@@ -401,77 +401,22 @@ if (!API_KEY) {
     process.exit(1);
   }
 
-  const userAgent = await page.evaluate(() => navigator.userAgent);
-
   // ───────────────────────────────────────────────────────────────────────────
-  // 8) Send sitekey + page URL to 2Captcha via HTTPS
+  // 8) Solve the hCaptcha using puppeteer-extra-plugin-recaptcha
   // ───────────────────────────────────────────────────────────────────────────
-  console.log("📡 Submitting sitekey+pageurl to 2Captcha (HTTPS)…");
-  let inResponseJSON;
+  console.log("🤖 Solving hCaptcha via page.solveRecaptchas()…");
+  let solved = [], error = null, token = null;
   try {
-    const inResponse = await fetch(
-      `https://2captcha.com/in.php?key=${API_KEY}` +
-      `&method=hcaptcha&sitekey=${encodeURIComponent(sitekey)}` +
-      `&pageurl=${encodeURIComponent(PAGE_URL)}` +
-      `&json=1&userAgent=${encodeURIComponent(userAgent)}`
-    );
-    inResponseJSON = await inResponse.json();
+    const result = await page.solveRecaptchas();
+    solved = result.solved || [];
+    error = result.error || null;
+    if (solved.length > 0) {
+      token = solved[0].response || solved[0].text || null;
+    }
   } catch (err) {
-    console.error("❌ Network error while sending to 2Captcha:", err);
-    await browser.close();
-    process.exit(1);
+    error = err;
   }
-
-  if (!inResponseJSON || inResponseJSON.status !== 1) {
-    console.error("❌ 2Captcha API returned an error at submission:", inResponseJSON);
-    await browser.close();
-    process.exit(1);
-  }
-  const captchaId = inResponseJSON.request;
-  console.log("✅ 2Captcha recognized request, captchaId =", captchaId);
-
-  // ───────────────────────────────────────────────────────────────────────────
-  // 9) Poll https://2captcha.com/res.php every 5s (max 24 attempts ~120s)
-  // ───────────────────────────────────────────────────────────────────────────
-  console.log("⏳ Waiting for 2Captcha to solve the hCaptcha (up to ~120s) …");
-  let token = null;
-  for (let attempt = 1; attempt <= 24; attempt++) {
-    await new Promise(r => setTimeout(r, 5000));
-
-    let resJSON = null;
-    try {
-      const resResp = await fetch(
-        `https://2captcha.com/res.php?key=${API_KEY}` +
-        `&action=get&id=${captchaId}&json=1`
-      );
-      resJSON = await resResp.json();
-    } catch (err) {
-      console.warn(`⚠️ [Attempt ${attempt}] Error polling 2Captcha:`, err);
-      continue;
-    }
-
-    if (!resJSON) {
-      console.warn(`⚠️ [Attempt ${attempt}] Empty JSON from 2Captcha.`);
-      continue;
-    }
-    if (resJSON.status === 0 && resJSON.request === "CAPCHA_NOT_READY") {
-      console.log(`   → Not ready yet (${attempt}/24)…`);
-      continue;
-    }
-    if (resJSON.status === 1) {
-      token = resJSON.request;
-      console.log("✅ Received solved hCaptcha token from 2Captcha!");
-      break;
-    }
-    console.error(`❌ [Attempt ${attempt}] 2Captcha returned error:`, resJSON);
-    break;
-  }
-
-  if (!token) {
-    console.error("❌ Timed out waiting for hCaptcha token. Exiting.");
-    await browser.close();
-    process.exit(1);
-  }
+  if (error) console.error("❌ plugin error:", error);
 
   // ───────────────────────────────────────────────────────────────────────────
   // 10) Inject the token into <textarea name="h-captcha-response"> both in the
