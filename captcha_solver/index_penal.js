@@ -437,6 +437,7 @@ if (!API_KEY) {
   }
 
   // ───────────────────────────────────────────────────────────────────────────
+
   // 11) Force‐click the hCaptcha “I am human” checkbox (inside same frame)
   // ───────────────────────────────────────────────────────────────────────────
   try {
@@ -453,8 +454,8 @@ if (!API_KEY) {
     console.warn("⚠️ Unable to click the hCaptcha checkbox. Are selectors correct?", err);
   }
 
-  // Give Imperva 2s to *actually* remove its gate overlay
-  await new Promise(r => setTimeout(r, 2000));
+  // Wait for the Incapsula overlay iframe to disappear
+  await page.waitForSelector('iframe#main-iframe', { hidden: true });
   console.log("🎉 Done solving hCaptcha. Imperva gate should now be lifted.");
 
   // ───────────────────────────────────────────────────────────────────────────
