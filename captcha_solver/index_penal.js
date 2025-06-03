@@ -264,12 +264,24 @@
 require("dotenv").config();
 const puppeteer = require("puppeteer-extra");
 const RecaptchaPlugin = require("puppeteer-extra-plugin-recaptcha");
+const fs = require("fs");
+const path = require("path");
 puppeteer.use(
   RecaptchaPlugin({
     provider: { id: "2captcha", token: process.env.TWOCAPTCHA_KEY },
     visualFeedback: false,
   })
 );
+
+const debugShots = process.env.DEBUG_SHOTS === "1";
+async function snap(page, label) {
+  if (!debugShots) return;
+  const dir = path.join(__dirname, "debug_screenshots");
+  await fs.promises.mkdir(dir, { recursive: true });
+  const file = path.join(dir, `${Date.now()}_${label}.png`);
+  await page.screenshot({ path: file, fullPage: true });
+  console.log(`🖼️ Saved screenshot: ${file}`);
+}
 
 // If you also want to automatically solve in‐page reCAPTCHAs, you can
 // re‐add the puppeteer-extra recaptcha plugin here. For now, the code
@@ -328,6 +340,7 @@ if (!API_KEY) {
     waitUntil: "networkidle2",
     timeout: 120_000
   });
+  await snap(page, 'after-goto');
 
   // ───────────────────────────────────────────────────────────────────────────
   // 4) Wait for Incapsula gate’s <iframe id="main-iframe">
@@ -388,53 +401,149 @@ if (!API_KEY) {
     process.exit(1);
   }
 
+  const userAgent = await page.evaluate(() => navigator.userAgent);
+
   // ───────────────────────────────────────────────────────────────────────────
-  // 8) Solve the hCaptcha using puppeteer-extra-plugin-recaptcha
+  // 8) Send sitekey + page URL to 2Captcha via HTTPS
   // ───────────────────────────────────────────────────────────────────────────
-  console.log("🤖 Solving hCaptcha via page.solveRecaptchas()…");
-  let solved = [], error = null, token = null;
+  console.log("📡 Submitting sitekey+pageurl to 2Captcha (HTTPS)…");
+  let inResponseJSON;
   try {
-    const result = await page.solveRecaptchas();
-    solved = result.solved || [];
-    error = result.error || null;
-    if (solved.length > 0) {
-      token = solved[0].response || solved[0].text || null;
-    }
+    const inResponse = await fetch(
+      `https://2captcha.com/in.php?key=${API_KEY}` +
+      `&method=hcaptcha&sitekey=${encodeURIComponent(sitekey)}` +
+      `&pageurl=${encodeURIComponent(PAGE_URL)}` +
+      `&json=1&userAgent=${encodeURIComponent(userAgent)}`
+    );
+    inResponseJSON = await inResponse.json();
   } catch (err) {
-    error = err;
+    console.error("❌ Network error while sending to 2Captcha:", err);
+    await browser.close();
+    process.exit(1);
   }
-  if (error) console.error("❌ plugin error:", error);
 
-  if (token) {
-    console.log("✍️ Mirroring hCaptcha token into textareas…");
-    await incapsulaFrame.evaluate(resolvedToken => {
-      let ta = document.querySelector("textarea[name='h-captcha-response']");
-      if (!ta) {
-        ta = document.createElement('textarea');
-        ta.name = 'h-captcha-response';
-        ta.style.display = 'none';
-        document.body.appendChild(ta);
-      }
-      ta.value = resolvedToken;
-      ta.innerText = resolvedToken;
-      ta.dispatchEvent(new Event('change', { bubbles: true }));
-
-      let ga = document.querySelector("textarea[name='g-recaptcha-response']");
-      if (!ga) {
-        ga = document.createElement('textarea');
-        ga.name = 'g-recaptcha-response';
-        ga.style.display = 'none';
-        document.body.appendChild(ga);
-      }
-      ga.value = resolvedToken;
-      ga.innerText = resolvedToken;
-      ga.dispatchEvent(new Event('change', { bubbles: true }));
-
-      if (window.hcaptcha && typeof window.hcaptcha.execute === 'function') {
-        try { window.hcaptcha.execute(); } catch (_) { /* ignore */ }
-      }
-    }, token);
+  if (!inResponseJSON || inResponseJSON.status !== 1) {
+    console.error("❌ 2Captcha API returned an error at submission:", inResponseJSON);
+    await browser.close();
+    process.exit(1);
   }
+  const captchaId = inResponseJSON.request;
+  console.log("✅ 2Captcha recognized request, captchaId =", captchaId);
+
+  // ───────────────────────────────────────────────────────────────────────────
+  // 9) Poll https://2captcha.com/res.php every 5s (max 24 attempts ~120s)
+  // ───────────────────────────────────────────────────────────────────────────
+  console.log("⏳ Waiting for 2Captcha to solve the hCaptcha (up to ~120s) …");
+  let token = null;
+  for (let attempt = 1; attempt <= 24; attempt++) {
+    await new Promise(r => setTimeout(r, 5000));
+
+    let resJSON = null;
+    try {
+      const resResp = await fetch(
+        `https://2captcha.com/res.php?key=${API_KEY}` +
+        `&action=get&id=${captchaId}&json=1`
+      );
+      resJSON = await resResp.json();
+    } catch (err) {
+      console.warn(`⚠️ [Attempt ${attempt}] Error polling 2Captcha:`, err);
+      continue;
+    }
+
+    if (!resJSON) {
+      console.warn(`⚠️ [Attempt ${attempt}] Empty JSON from 2Captcha.`);
+      continue;
+    }
+    if (resJSON.status === 0 && resJSON.request === "CAPCHA_NOT_READY") {
+      console.log(`   → Not ready yet (${attempt}/24)…`);
+      continue;
+    }
+    if (resJSON.status === 1) {
+      token = resJSON.request;
+      console.log("✅ Received solved hCaptcha token from 2Captcha!");
+      break;
+    }
+    console.error(`❌ [Attempt ${attempt}] 2Captcha returned error:`, resJSON);
+    break;
+  }
+
+  if (!token) {
+    console.error("❌ Timed out waiting for hCaptcha token. Exiting.");
+    await browser.close();
+    process.exit(1);
+  }
+
+  // ───────────────────────────────────────────────────────────────────────────
+  // 10) Inject the token into <textarea name="h-captcha-response"> both in the
+  //     main page and inside incapsulaFrame
+  // ───────────────────────────────────────────────────────────────────────────
+  console.log("✍️ Injecting the hCaptcha solution into textarea...");
+
+  // Update/create textareas on the main page
+  await page.evaluate(resolvedToken => {
+    let ta = document.querySelector("textarea[name='h-captcha-response']");
+    if (!ta) {
+      ta = document.createElement('textarea');
+      ta.name = 'h-captcha-response';
+      ta.style.display = 'none';
+      document.body.appendChild(ta);
+    }
+    ta.value = resolvedToken;
+    ta.innerText = resolvedToken;
+    ta.dispatchEvent(new Event('change', { bubbles: true }));
+
+    let ga = document.querySelector("textarea[name='g-recaptcha-response']");
+    if (!ga) {
+      ga = document.createElement('textarea');
+      ga.name = 'g-recaptcha-response';
+      ga.style.display = 'none';
+      document.body.appendChild(ga);
+    }
+    ga.value = resolvedToken;
+    ga.innerText = resolvedToken;
+    ga.dispatchEvent(new Event('change', { bubbles: true }));
+  }, token);
+
+  const frameValid = await incapsulaFrame.evaluate(tk => {
+    try {
+      return !!(window.hcaptcha && window.hcaptcha.getResponse() === tk);
+    } catch (_) { return false; }
+  }, token);
+  const pageValid = await page.evaluate(tk => {
+    try {
+      return !!(window.hcaptcha && window.hcaptcha.getResponse() === tk);
+    } catch (_) { return false; }
+  }, token);
+  console.log("✅ hcaptcha.getResponse() check →", { frameValid, pageValid });
+
+  await incapsulaFrame.evaluate(resolvedToken => {
+    let ta = document.querySelector("textarea[name='h-captcha-response']");
+    if (!ta) {
+      ta = document.createElement('textarea');
+      ta.name = 'h-captcha-response';
+      ta.style.display = 'none';
+      document.body.appendChild(ta);
+    }
+    ta.value = resolvedToken;
+    ta.innerText = resolvedToken;
+    ta.dispatchEvent(new Event('change', { bubbles: true }));
+
+    let ga = document.querySelector("textarea[name='g-recaptcha-response']");
+    if (!ga) {
+      ga = document.createElement('textarea');
+      ga.name = 'g-recaptcha-response';
+      ga.style.display = 'none';
+      document.body.appendChild(ga);
+    }
+    ga.value = resolvedToken;
+    ga.innerText = resolvedToken;
+    ga.dispatchEvent(new Event('change', { bubbles: true }));
+
+    if (window.hcaptcha && typeof window.hcaptcha.execute === 'function') {
+      try { window.hcaptcha.execute(); } catch (_) { /* ignore */ }
+    }
+  }, token);
+  await snap(page, 'after-token');
 
   // ───────────────────────────────────────────────────────────────────────────
 
@@ -455,8 +564,14 @@ if (!API_KEY) {
   }
 
   // Wait for the Incapsula overlay iframe to disappear
-  await page.waitForSelector('iframe#main-iframe', { hidden: true });
+  // Give Imperva ample time to drop the gate after solving the hCaptcha
+  await page.waitForSelector('iframe#main-iframe', {
+    hidden: true,
+    // the solve might take a while, so wait up to three minutes
+    timeout: 180_000
+  });
   console.log("🎉 Done solving hCaptcha. Imperva gate should now be lifted.");
+  await snap(page, 'after-gate');
 
   // ───────────────────────────────────────────────────────────────────────────
   // 12) Now proceed with “Aceptar” → Fill CÉDULA → solve in‐page reCAPTCHAs → etc.
