@@ -1,8 +1,16 @@
 import os, subprocess
+from retry import retry
+from subprocess import TimeoutExpired
 
-def get_deuda_from_js(cedula: str, script_path: str) -> str:
+@retry(
+    max_attempts=3,
+    initial_delay=2.0,
+    backoff_factor=2.0,
+    exceptions=(RuntimeError, TimeoutExpired)
+)
+def get_deuda_from_js(cedula: str) -> str:
     proc = subprocess.run(
-        ["node", script_path, cedula],
+        ["node", "captcha_solver/index_deudas.js", cedula],
         capture_output=True, text=True, timeout=120
     )
     if proc.returncode != 0:
@@ -11,10 +19,7 @@ def get_deuda_from_js(cedula: str, script_path: str) -> str:
 
 if __name__ == "__main__":
     # assume this Python file lives at .../advfinsa/
-    base_dir   = os.path.dirname(__file__)
-    js_relpath = os.path.join("captcha_solver", "index_deudas.js")
-    js_path    = os.path.join(base_dir, js_relpath)
 
     for test_id in ["0990071969001", "0912345678"]:
-        status = get_deuda_from_js(test_id, script_path=js_path)
+        status = get_deuda_from_js(test_id)
         print(f"{test_id} → {status}")

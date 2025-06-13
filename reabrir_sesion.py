@@ -2,9 +2,7 @@
 from playwright.sync_api import sync_playwright
 
 SRI_PAGE = (
-    "https://srienlinea.sri.gob.ec/"
-    "sri-en-linea/SriPagosWeb/ConsultaDeudasFirmesImpugnadas/Consultas/"
-    "consultaDeudasFirmesImpugnadas"
+"https://calculadoras.trabajo.gob.ec/dependencia"
 )
 
 def main():
