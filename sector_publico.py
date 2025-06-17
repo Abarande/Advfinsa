@@ -1,14 +1,17 @@
 import subprocess
 import sys
+from paths import JS_FOLDER
+import os
+from utils import run_node 
+script = os.path.join(JS_FOLDER, "index_dependencia_gob.js")
 
 def consulta_dependencia(cedula, fecha):
     """
     Llama al script Node.js y devuelve la línea final con el campo `registro`.
     Si Node falla, captura su stdout/stderr y devuelve "ERROR".
     """
-    script = "captcha_solver/index_dependencia_gob.js"
     try:
-        proc = subprocess.run(
+        proc = run_node(
             ["node", script, cedula, fecha],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -41,8 +44,7 @@ def consulta_dependencia(cedula, fecha):
 
 if __name__ == "__main__":
     ejemplos = [
-        ("0925647851", "08/12/2002"),
-        ("0908890452", "03/11/1977"),
+        ("0914788245", "05/01/1973")
     ]
 
     for ced, fech in ejemplos:

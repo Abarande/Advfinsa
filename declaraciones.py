@@ -2,12 +2,16 @@ import subprocess
 import shlex
 from retry import retry
 from subprocess import TimeoutExpired
+from paths import JS_FOLDER
+import os
+from utils import run_node 
+NODE_SCRIPT = os.path.join(JS_FOLDER, "index_declaraciones.js")
 
 @retry(
     max_attempts=3,
     initial_delay=2.0,
     backoff_factor=2.0,
-    exceptions=(RuntimeError, TimeoutExpired)
+    exceptions=(Exception,)
 )
 def get_records_total(cedula: str, nombre: str) -> int:
     """
@@ -16,8 +20,8 @@ def get_records_total(cedula: str, nombre: str) -> int:
     """
 
     # Ejecutamos y capturamos stdout/stderr
-    proc = subprocess.run(
-        ["node", "captcha_solver/index_declaraciones.js", cedula, nombre],
+    proc = run_node(
+        ["node", NODE_SCRIPT, cedula, nombre],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         encoding="utf-8",

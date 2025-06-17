@@ -1,6 +1,10 @@
 import os, subprocess
 from retry import retry
 from subprocess import TimeoutExpired
+from paths import JS_FOLDER
+from utils import run_node 
+
+NODE_SCRIPT = os.path.join(JS_FOLDER, "index_deudas.js")
 
 @retry(
     max_attempts=3,
@@ -9,8 +13,8 @@ from subprocess import TimeoutExpired
     exceptions=(RuntimeError, TimeoutExpired)
 )
 def get_deuda_from_js(cedula: str) -> str:
-    proc = subprocess.run(
-        ["node", "captcha_solver/index_deudas.js", cedula],
+    proc = run_node(
+        ["node", NODE_SCRIPT, cedula],
         capture_output=True, text=True, timeout=120
     )
     if proc.returncode != 0:

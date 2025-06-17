@@ -25,10 +25,10 @@ def retry(
                     if attempt == max_attempts:
                         # no more retries, just bubble
                         raise
-                    print(
-                        f"⚠️  {fn.__name__} failed (attempt {attempt}/{max_attempts}): {e!r}\n"
-                        f"    retrying in {delay:.1f}s…"
-                    )
+                    # print(
+                    #     f"⚠️  {fn.__name__} failed (attempt {attempt}/{max_attempts}): {e!r}\n"
+                    #     f"    retrying in {delay:.1f}s…"
+                    # )
                     time.sleep(delay)
                     delay *= backoff_factor
             # shouldn't get here
